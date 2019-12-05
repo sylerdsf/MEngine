@@ -1,6 +1,6 @@
 #pragma once
 #include "d3dUtil.h"
-#include "../MObject.h"
+#include "../RenderComponent/MObject.h"
 class DescriptorHeap : MObject
 {
 protected:

@@ -1,15 +1,18 @@
 //***************************************************************************************
 // CrateApp.cpp by Frank Luna (C) 2015 All Rights Reserved.
 //***************************************************************************************
-#include "Shader.h"
-#include "Material.h"
+#include "RenderComponent/Shader.h"
+#include "RenderComponent/Material.h"
 #include "Common/d3dApp.h"
 #include "Common/MathHelper.h"
-#include "Common/UploadBuffer.h"
+#include "RenderComponent/UploadBuffer.h"
 #include "Common/GeometryGenerator.h"
-#include "FrameResource.h"
-#include "ShaderID.h"
-#include "Texture2D.h"
+#include "Singleton/FrameResource.h"
+#include "Singleton/ShaderID.h"
+#include "RenderComponent/Texture2D.h"
+#include "Singleton/MeshLayout.h"
+#include "Singleton/PSOContainer.h"
+#include "Common/Camera.h"
 using Microsoft::WRL::ComPtr;
 using namespace DirectX;
 using namespace DirectX::PackedVector;
@@ -90,8 +93,6 @@ private:
     void DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::vector<RenderItem*>& ritems);
 
 private:
-
-    std::vector<std::unique_ptr<FrameResource>> mFrameResources;
     FrameResource* mCurrFrameResource = nullptr;
     int mCurrFrameResourceIndex = 0;
 
@@ -101,13 +102,14 @@ private:
 	std::shared_ptr<DescriptorHeap> bindlessTextureHeap;
 	std::unordered_map<std::string, std::unique_ptr<MeshGeometry>> mGeometries;
 	std::unordered_map<std::string, std::unique_ptr<FMaterial>> mMaterials;
-	std::unordered_map<std::string, std::shared_ptr<Texture2D>> mTextures;
+	std::vector<std::shared_ptr<Texture2D>> mTextures;
 	Shader* opaqueShader;
-	//std::shared_ptr<Material> defaultMaterial;
+	std::shared_ptr<Material> opaqueMaterial;
+	
 
-    std::vector<D3D12_INPUT_ELEMENT_DESC> mInputLayout;
+   // std::vector<D3D12_INPUT_ELEMENT_DESC>* mInputLayout;
 
-    ComPtr<ID3D12PipelineState> mOpaquePSO = nullptr;
+	ID3D12PipelineState* mOpaquePSO = nullptr;
  
 	// List of all the render items.
 	std::vector<std::unique_ptr<RenderItem>> mAllRitems;
@@ -116,11 +118,8 @@ private:
 	std::vector<RenderItem*> mOpaqueRitems;
 
     PassConstants mMainPassCB;
-
-	XMFLOAT3 mEyePos = { 0.0f, 0.0f, 0.0f };
-	XMFLOAT4X4 mView = MathHelper::Identity4x4();
-	XMFLOAT4X4 mProj = MathHelper::Identity4x4();
-
+	std::shared_ptr<Camera> mainCamera;
+	std::shared_ptr <UploadBuffer> materialPropertyBuffer;
 	float mTheta = 1.3f*XM_PI;
 	float mPhi = 0.4f*XM_PI;
 	float mRadius = 2.5f;
@@ -164,6 +163,7 @@ CrateApp::~CrateApp()
 
 bool CrateApp::Initialize()
 {
+
     if(!D3DApp::Initialize())
         return false;
 	ShaderID::Init();
@@ -173,17 +173,16 @@ bool CrateApp::Initialize()
     // Get the increment size of a descriptor in this heap type.  This is hardware specific, 
 	// so we have to query this information.
     mCbvSrvDescriptorSize = md3dDevice->GetDescriptorHandleIncrementSize(D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV);
-
- 
 	LoadTextures();
 	BuildDescriptorHeaps();
     BuildShadersAndInputLayout();
     BuildShapeGeometry();
 	BuildMaterials();
     BuildRenderItems();
-    BuildFrameResources();
+	BuildFrameResources();
+	mainCamera = std::make_shared<Camera>(md3dDevice.Get());
+	mainCamera->SetLens(0.25f*MathHelper::Pi, AspectRatio(), 1.0f, 1000.0f);
     BuildPSOs();
-
     // Execute the initialization commands.
     ThrowIfFailed(mCommandList->Close());
     ID3D12CommandList* cmdsLists[] = { mCommandList.Get() };
@@ -198,10 +197,6 @@ bool CrateApp::Initialize()
 void CrateApp::OnResize()
 {
     D3DApp::OnResize();
-
-    // The window resized, so update the aspect ratio and recompute the projection matrix.
-    XMMATRIX P = XMMatrixPerspectiveFovLH(0.25f*MathHelper::Pi, AspectRatio(), 1.0f, 1000.0f);
-    XMStoreFloat4x4(&mProj, P);
 }
 
 void CrateApp::Update(const GameTimer& gt)
@@ -211,7 +206,7 @@ void CrateApp::Update(const GameTimer& gt)
 
     // Cycle through the circular frame resource array.
     mCurrFrameResourceIndex = (mCurrFrameResourceIndex + 1) % gNumFrameResources;
-    mCurrFrameResource = mFrameResources[mCurrFrameResourceIndex].get();
+    mCurrFrameResource = FrameResource::mFrameResources[mCurrFrameResourceIndex].get();
 
     // Has the GPU finished processing the commands of the current frame resource?
     // If not, wait until the GPU has completed commands up to this fence point.
@@ -232,7 +227,7 @@ void CrateApp::Draw(const GameTimer& gt)
 
     // A command list can be reset after it has been added to the command queue via ExecuteCommandList.
     // Reusing the command list reuses memory.
-    ThrowIfFailed(mCommandList->Reset(cmdListAlloc.Get(), mOpaquePSO.Get()));
+    ThrowIfFailed(mCommandList->Reset(cmdListAlloc.Get(), mOpaquePSO));
 
     mCommandList->RSSetViewports(1, &mScreenViewport);
     mCommandList->RSSetScissorRects(1, &mScissorRect);
@@ -249,10 +244,11 @@ void CrateApp::Draw(const GameTimer& gt)
     mCommandList->OMSetRenderTargets(1, &CurrentBackBufferView(), true, &DepthStencilView());
 
 	ID3D12DescriptorHeap* descriptorHeaps[] = { bindlessTextureHeap-> Get().Get()};
-	mCommandList->SetPipelineState(mOpaquePSO.Get());
+	mCommandList->SetPipelineState(mOpaquePSO);
 	mCommandList->SetDescriptorHeaps(_countof(descriptorHeaps), descriptorHeaps);
 	opaqueShader->BindRootSignature(mCommandList.Get());
-	std::shared_ptr<MObject> passCB = std::reinterpret_pointer_cast<MObject, UploadBuffer>(mCurrFrameResource->PassCB);
+	UINT camID = mainCamera->GetInstanceID();
+	std::shared_ptr<MObject> passCB = std::reinterpret_pointer_cast<MObject, UploadBuffer>(mCurrFrameResource->cameraCBs[camID].buffer);
 	//mCommandList->SetGraphicsRootConstantBufferView(2, mCurrFrameResource->PassCB->Resource()->GetGPUVirtualAddress());
 	opaqueShader->SetResource(mCommandList.Get(), ShaderID::GetPerCameraBufferID(), passCB, 0);
     DrawRenderItems(mCommandList.Get(), mOpaqueRitems);
@@ -327,17 +323,13 @@ void CrateApp::OnKeyboardInput(const GameTimer& gt)
 void CrateApp::UpdateCamera(const GameTimer& gt)
 {
 	// Convert Spherical to Cartesian coordinates.
+	XMFLOAT3 mEyePos;
 	mEyePos.x = mRadius*sinf(mPhi)*cosf(mTheta);
 	mEyePos.z = mRadius*sinf(mPhi)*sinf(mTheta);
 	mEyePos.y = mRadius*cosf(mPhi);
-
-	// Build the view matrix.
-	XMVECTOR pos = XMVectorSet(mEyePos.x, mEyePos.y, mEyePos.z, 1.0f);
-	XMVECTOR target = XMVectorZero();
-	XMVECTOR up = XMVectorSet(0.0f, 1.0f, 0.0f, 0.0f);
-
-	XMMATRIX view = XMMatrixLookAtLH(pos, target, up);
-	XMStoreFloat4x4(&mView, view);
+	XMFLOAT3 target = { 0,0,0 };
+	XMFLOAT3 up = { 0,1,0 };
+	mainCamera->LookAt(mEyePos, target, up);
 }
 
 void CrateApp::AnimateMaterials(const GameTimer& gt)
@@ -371,7 +363,7 @@ void CrateApp::UpdateObjectCBs(const GameTimer& gt)
 
 void CrateApp::UpdateMaterialCBs(const GameTimer& gt)
 {
-	auto currMaterialCB = mCurrFrameResource->MaterialCB;
+	auto currMaterialCB = materialPropertyBuffer;
 	for(auto& e : mMaterials)
 	{
 		// Only update the cbuffer data if the constants have changed.  If the cbuffer
@@ -397,8 +389,9 @@ void CrateApp::UpdateMaterialCBs(const GameTimer& gt)
 
 void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 {
-	XMMATRIX view = XMLoadFloat4x4(&mView);
-	XMMATRIX proj = XMLoadFloat4x4(&mProj);
+	mainCamera->UpdateViewMatrix();
+	XMMATRIX view = mainCamera->GetView();
+	XMMATRIX proj = mainCamera->GetProj();
 
 	XMMATRIX viewProj = XMMatrixMultiply(view, proj);
 	XMMATRIX invView = XMMatrixInverse(&XMMatrixDeterminant(view), view);
@@ -411,32 +404,36 @@ void CrateApp::UpdateMainPassCB(const GameTimer& gt)
 	XMStoreFloat4x4(&mMainPassCB.InvProj, XMMatrixTranspose(invProj));
 	XMStoreFloat4x4(&mMainPassCB.ViewProj, XMMatrixTranspose(viewProj));
 	XMStoreFloat4x4(&mMainPassCB.InvViewProj, XMMatrixTranspose(invViewProj));
-	mMainPassCB.EyePosW = mEyePos;
-	mMainPassCB.RenderTargetSize = XMFLOAT2((float)mClientWidth, (float)mClientHeight);
-	mMainPassCB.InvRenderTargetSize = XMFLOAT2(1.0f / mClientWidth, 1.0f / mClientHeight);
 	mMainPassCB.NearZ = 1.0f;
 	mMainPassCB.FarZ = 1000.0f;
 	mMainPassCB.TotalTime = gt.TotalTime();
 	mMainPassCB.DeltaTime = gt.DeltaTime();
-	mMainPassCB.AmbientLight = { 0.25f, 0.25f, 0.35f, 1.0f };
-	mMainPassCB.Lights[0].Direction = { 0.57735f, -0.57735f, 0.57735f };
-	mMainPassCB.Lights[0].Strength = { 0.6f, 0.6f, 0.6f };
-	mMainPassCB.Lights[1].Direction = { -0.57735f, -0.57735f, 0.57735f };
-	mMainPassCB.Lights[1].Strength = { 0.3f, 0.3f, 0.3f };
-	mMainPassCB.Lights[2].Direction = { 0.0f, -0.707f, -0.707f };
-	mMainPassCB.Lights[2].Strength = { 0.15f, 0.15f, 0.15f };
-
-	auto currPassCB = mCurrFrameResource->PassCB;
-	currPassCB->CopyData(0, &mMainPassCB);
+	auto currPassCB = mCurrFrameResource->cameraCBs[mainCamera->GetInstanceID()];
+	currPassCB.buffer->CopyData(0, &mMainPassCB);
 }
 
 void CrateApp::LoadTextures()
 {
+	mTextures.reserve(9);
+	mTextures.clear();
 	auto woodCrateTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "woodCrateTex", L"Textures/WoodCrate01.dds");
-	mTextures[woodCrateTex->Name] = woodCrateTex;
+	mTextures.push_back(woodCrateTex);
 	auto brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "brickTex", L"Textures/bricks.dds");
-	mTextures[brickTex->Name] = brickTex;
-
+	mTextures.push_back(brickTex);
+    brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "brickTex2", L"Textures/bricks2.dds");
+	mTextures.push_back(brickTex);
+	brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "brickTex3", L"Textures/bricks3.dds");
+	mTextures.push_back(brickTex);
+	brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "grass", L"Textures/grass.dds");
+	mTextures.push_back(brickTex);
+	brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "head_diff", L"Textures/head_diff.dds");
+	mTextures.push_back(brickTex);
+	brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "ice", L"Textures/ice.dds");
+	mTextures.push_back(brickTex);	
+	brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "jacket_diff", L"Textures/jacket_diff.dds");
+	mTextures.push_back(brickTex);
+	brickTex = std::make_shared<Texture2D>(mCommandList.Get(), md3dDevice.Get(), "jacket_diff", L"Textures/pants_diff.dds");
+	mTextures.push_back(brickTex);
 }
 
 void CrateApp::BuildDescriptorHeaps()
@@ -445,18 +442,13 @@ void CrateApp::BuildDescriptorHeaps()
 	// Create the SRV heap.
 	//
 	bindlessTextureHeap = std::make_shared<DescriptorHeap>();
-	bindlessTextureHeap->Create(md3dDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, 2, true);
-	//
-	// Fill out the heap with actual descriptors.
-	//
-	auto woodCrateTex = mTextures["woodCrateTex"]->GetResource();
- 
+	bindlessTextureHeap->Create(md3dDevice.Get(), D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV, mTextures.size(), true);
 	D3D12_SHADER_RESOURCE_VIEW_DESC srvDesc = {};
-	mTextures["woodCrateTex"]->GetResourceViewDescriptor(srvDesc);
-	md3dDevice->CreateShaderResourceView(woodCrateTex, &srvDesc, bindlessTextureHeap->hCPU(0));
-	woodCrateTex = mTextures["brickTex"]->GetResource();
-	mTextures["brickTex"]->GetResourceViewDescriptor(srvDesc);
-	md3dDevice->CreateShaderResourceView(woodCrateTex, &srvDesc, bindlessTextureHeap->hCPU(1));
+	for (int i = 0; i < mTextures.size(); ++i)
+	{
+		mTextures[i]->GetResourceViewDescriptor(srvDesc);
+		md3dDevice->CreateShaderResourceView(mTextures[i]->GetResource(), &srvDesc, bindlessTextureHeap->hCPU(i));
+	}
 }
 
 void CrateApp::BuildShadersAndInputLayout()
@@ -469,13 +461,14 @@ void CrateApp::BuildShadersAndInputLayout()
 	p.name = "OpaqueStandard";
 	p.rasterizeState = CD3DX12_RASTERIZER_DESC(D3D12_DEFAULT);
 	p.blendState = CD3DX12_BLEND_DESC(D3D12_DEFAULT);
+	p.depthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
 	p.psShader = nullptr;
 	p.vsShader = nullptr;
 	std::vector<ShaderVariable> var(4);
 	var[0].type = ShaderVariable::Type::BindlessTexture;
 	var[0].registerPos = 2;
 	var[0].space = 1;
-	var[0].tableSize = 2;
+	var[0].tableSize = 9;
 	var[0].name = "gDiffuseMap";
 	
 	var[1].type = ShaderVariable::Type::ConstantBuffer;
@@ -493,12 +486,16 @@ void CrateApp::BuildShadersAndInputLayout()
 	var[3].registerPos = 2;
 	var[3].space = 0;
 	opaqueShader = new Shader(allPasses, var, md3dDevice.Get());
-    mInputLayout =
-    {
-        { "POSITION", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 0, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-        { "NORMAL", 0, DXGI_FORMAT_R32G32B32_FLOAT, 0, 12, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-		{ "TEXCOORD", 0, DXGI_FORMAT_R32G32_FLOAT, 0, 24, D3D12_INPUT_CLASSIFICATION_PER_VERTEX_DATA, 0 },
-    };
+	/*mInputLayout = MeshLayout::GetMeshLayoutValue(
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false
+	);
+	*/
 }
 
 void CrateApp::BuildShapeGeometry()
@@ -553,30 +550,29 @@ void CrateApp::BuildShapeGeometry()
 
 void CrateApp::BuildPSOs()
 {
-    D3D12_GRAPHICS_PIPELINE_STATE_DESC opaquePsoDesc;
-
-	//
-	// PSO for opaque objects.
-	//
-    ZeroMemory(&opaquePsoDesc, sizeof(D3D12_GRAPHICS_PIPELINE_STATE_DESC));
-	opaquePsoDesc.InputLayout = { mInputLayout.data(), (UINT)mInputLayout.size() };
-	opaqueShader->GetPassPSODesc(0, &opaquePsoDesc);
-	opaquePsoDesc.DepthStencilState = CD3DX12_DEPTH_STENCIL_DESC(D3D12_DEFAULT);
-	opaquePsoDesc.SampleMask = UINT_MAX;
-	opaquePsoDesc.PrimitiveTopologyType = D3D12_PRIMITIVE_TOPOLOGY_TYPE_TRIANGLE;
-	opaquePsoDesc.NumRenderTargets = 1;
-	opaquePsoDesc.RTVFormats[0] = mBackBufferFormat;
-	opaquePsoDesc.SampleDesc.Count = m4xMsaaState ? 4 : 1;
-	opaquePsoDesc.SampleDesc.Quality = m4xMsaaState ? (m4xMsaaQuality - 1) : 0;
-	opaquePsoDesc.DSVFormat = mDepthStencilFormat;
-    ThrowIfFailed(md3dDevice->CreateGraphicsPipelineState(&opaquePsoDesc, IID_PPV_ARGS(&mOpaquePSO)));
+	PSODescriptor desc;
+	desc.depthFormat = mDepthStencilFormat;
+	desc.meshLayoutIndex = MeshLayout::GetMeshLayoutIndex(
+		true,
+		false,
+		false,
+		true,
+		false,
+		false,
+		false
+	);
+	desc.rtCount = 1;
+	desc.rtFormat[0] = mBackBufferFormat;
+	desc.shaderPass = 0;
+	desc.shaderPtr = opaqueShader;
+	mOpaquePSO = PSOContainer::GetState(desc, md3dDevice.Get());
 }
 
 void CrateApp::BuildFrameResources()
 {
     for(int i = 0; i < gNumFrameResources; ++i)
     {
-        mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(),
+        FrameResource::mFrameResources.push_back(std::make_unique<FrameResource>(md3dDevice.Get(),
             1, (UINT)mAllRitems.size(), (UINT)mMaterials.size()));
     }
 }
@@ -592,6 +588,10 @@ void CrateApp::BuildMaterials()
 	woodCrate->Roughness = 0.2f;
 
 	mMaterials["woodCrate"] = std::move(woodCrate);
+	materialPropertyBuffer = std::make_shared<UploadBuffer>();
+	materialPropertyBuffer->Create(md3dDevice.Get(), 1, true, sizeof(MaterialConstants));
+	opaqueMaterial = std::make_shared<Material>(opaqueShader, materialPropertyBuffer, 0, bindlessTextureHeap);
+	opaqueMaterial->SetBindlessResource(ShaderID::PropertyToID("gDiffuseMap"), 0);
 }
 
 void CrateApp::BuildRenderItems()
@@ -617,8 +617,6 @@ void CrateApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::ve
     UINT matCBByteSize = d3dUtil::CalcConstantBufferByteSize(sizeof(MaterialConstants));
  
 	auto objectCB = std::reinterpret_pointer_cast<MObject, UploadBuffer>(mCurrFrameResource->ObjectCB);
-	auto matCB = std::reinterpret_pointer_cast<MObject, UploadBuffer>(mCurrFrameResource->MaterialCB);
-	auto bindlessHeap = std::reinterpret_pointer_cast<MObject, DescriptorHeap>(bindlessTextureHeap);
     // For each render item...
     for(size_t i = 0; i < ritems.size(); ++i)
     {
@@ -627,10 +625,9 @@ void CrateApp::DrawRenderItems(ID3D12GraphicsCommandList* cmdList, const std::ve
         cmdList->IASetVertexBuffers(0, 1, &ri->Geo->VertexBufferView());
         cmdList->IASetIndexBuffer(&ri->Geo->IndexBufferView());
         cmdList->IASetPrimitiveTopology(ri->PrimitiveType);
-
+		opaqueMaterial->BindShaderResource(mCommandList.Get());
 		opaqueShader->SetResource(mCommandList.Get(), ShaderID::GetPerObjectBufferID(), objectCB, 0);
-		opaqueShader->SetResource(mCommandList.Get(), ShaderID::GetPerMaterialBufferID(), matCB, 0);
-		opaqueShader->SetResource(mCommandList.Get(), ShaderID::PropertyToID("gDiffuseMap"), bindlessHeap, 0);
+		//opaqueShader->SetResource(mCommandList.Get(), ShaderID::PropertyToID("gDiffuseMap"), bindlessHeap, 0);
         cmdList->DrawIndexedInstanced(ri->IndexCount, 1, ri->StartIndexLocation, ri->BaseVertexLocation, 0);
     }
 }

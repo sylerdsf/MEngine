@@ -20,7 +20,7 @@
 // Include structures and functions for lighting.
 #include "LightingUtil.hlsl"
 
-Texture2D    gDiffuseMap[2] : register(t2, space1);
+Texture2D    gDiffuseMap[9] : register(t2, space1);
 SamplerState gsamLinear  : register(s4);
 // Constant data that varies per frame.
 cbuffer Per_Object_Buffer : register(b0)
@@ -38,21 +38,10 @@ cbuffer Per_Camera_Buffer : register(b1)
     float4x4 gInvProj;
     float4x4 gViewProj;
     float4x4 gInvViewProj;
-    float3 gEyePosW;
-    float cbPerObjectPad1;
-    float2 gRenderTargetSize;
-    float2 gInvRenderTargetSize;
     float gNearZ;
     float gFarZ;
     float gTotalTime;
     float gDeltaTime;
-    float4 gAmbientLight;
-
-    // Indices [0, NUM_DIR_LIGHTS) are directional lights;
-    // indices [NUM_DIR_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHTS) are point lights;
-    // indices [NUM_DIR_LIGHTS+NUM_POINT_LIGHTS, NUM_DIR_LIGHTS+NUM_POINT_LIGHT+NUM_SPOT_LIGHTS)
-    // are spot lights for a maximum of MaxLights per object.
-    Light gLights[MaxLights];
 };
 
 cbuffer Per_Material_Buffer : register(b2)
@@ -67,7 +56,7 @@ struct VertexIn
 {
 	float3 PosL    : POSITION;
     float3 NormalL : NORMAL;
-	float2 TexC    : TEXCOORD;
+	float2 TexC    : TEXCOORD0;
 };
 
 struct VertexOut
@@ -94,37 +83,16 @@ VertexOut VS(VertexIn vin)
 	
 	// Output vertex attributes for interpolation across triangle.
     float4 texC = mul(float4(vin.TexC, 0.0f, 1.0f), gTexTransform);
-    vout.TexC = mul(texC, gMatTransform).xy * 2;
+    vout.TexC = mul(texC, gMatTransform).xy;
 
     return vout;
 }
 
 float4 PS(VertexOut pin) : SV_Target
 {
-
-    float4 diffuseAlbedo = gDiffuseMap[pin.TexC.x > 1 ? 0.1 : 1.1].Sample(gsamLinear, pin.TexC) * gDiffuseAlbedo;
-
-    // Interpolating normal can unnormalize it, so renormalize it.
-    pin.NormalW = normalize(pin.NormalW);
-
-    // Vector from point being lit to eye. 
-    float3 toEyeW = normalize(gEyePosW - pin.PosW);
-
-    // Light terms.
-    float4 ambient = gAmbientLight*diffuseAlbedo;
-
-    const float shininess = 1.0f - gRoughness;
-    Material mat = { diffuseAlbedo, gFresnelR0, shininess };
-    float3 shadowFactor = 1.0f;
-    float4 directLight = ComputeLighting(gLights, mat, pin.PosW,
-        pin.NormalW, toEyeW, shadowFactor);
-
-    float4 litColor = ambient + directLight;
-
-    // Common convention to take alpha from diffuse material.
-    litColor.a = diffuseAlbedo.a;
-
-    return litColor;
+    float2 bindlessChooser = floor(saturate(pin.TexC) * 3);
+    float4 diffuseAlbedo = gDiffuseMap[bindlessChooser.x * 3 + bindlessChooser.y].Sample(gsamLinear, pin.TexC * 3) * gDiffuseAlbedo;
+    return diffuseAlbedo;
 }
 
 

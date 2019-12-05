@@ -12,14 +12,18 @@
 #define CAMERA_H
 
 #include "d3dUtil.h"
-
-class Camera
+#include "../RenderComponent/MObject.h"
+#include "../RenderComponent/CBufferPool.h"
+#include "../Singleton/FrameResource.h"
+class Camera : public MObject
 {
+protected:
+	virtual void Dispose();
 public:
 
-	Camera();
+	Camera(ID3D12Device* device);
 	~Camera();
-
+	
 	// Get/Set world camera position.
 	DirectX::XMVECTOR GetPosition()const;
 	DirectX::XMFLOAT3 GetPosition3f()const;
@@ -73,7 +77,7 @@ public:
 	void UpdateViewMatrix();
 
 private:
-
+	static CBufferPool pool;
 	// Camera coordinate system with coordinates relative to world space.
 	DirectX::XMFLOAT3 mPosition = { 0.0f, 0.0f, 0.0f };
 	DirectX::XMFLOAT3 mRight = { 1.0f, 0.0f, 0.0f };
@@ -95,4 +99,4 @@ private:
 	DirectX::XMFLOAT4X4 mProj = MathHelper::Identity4x4();
 };
 
-#endif // CAMERA_H
+#endif

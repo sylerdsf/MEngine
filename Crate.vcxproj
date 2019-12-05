@@ -28,13 +28,16 @@
     <ClInclude Include="Common\GameTimer.h" />
     <ClInclude Include="Common\GeometryGenerator.h" />
     <ClInclude Include="Common\MathHelper.h" />
-    <ClInclude Include="Common\UploadBuffer.h" />
-    <ClInclude Include="FrameResource.h" />
-    <ClInclude Include="Material.h" />
-    <ClInclude Include="MObject.h" />
-    <ClInclude Include="Shader.h" />
-    <ClInclude Include="ShaderID.h" />
-    <ClInclude Include="Texture2D.h" />
+    <ClInclude Include="RenderComponent\CBufferPool.h" />
+    <ClInclude Include="RenderComponent\Material.h" />
+    <ClInclude Include="RenderComponent\MObject.h" />
+    <ClInclude Include="RenderComponent\Shader.h" />
+    <ClInclude Include="RenderComponent\Texture2D.h" />
+    <ClInclude Include="RenderComponent\UploadBuffer.h" />
+    <ClInclude Include="Singleton\FrameResource.h" />
+    <ClInclude Include="Singleton\MeshLayout.h" />
+    <ClInclude Include="Singleton\PSOContainer.h" />
+    <ClInclude Include="Singleton\ShaderID.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="Common\Camera.cpp" />
@@ -46,13 +49,16 @@
     <ClCompile Include="Common\GeometryGenerator.cpp" />
     <ClCompile Include="Common\MathHelper.cpp" />
     <ClCompile Include="CrateApp.cpp" />
-    <ClCompile Include="FrameResource.cpp" />
-    <ClCompile Include="Material.cpp" />
-    <ClCompile Include="MObject.cpp" />
-    <ClCompile Include="Shader.cpp" />
-    <ClCompile Include="ShaderID.cpp" />
-    <ClCompile Include="Texture2D.cpp" />
-    <ClCompile Include="UploadBuffer.cpp" />
+    <ClCompile Include="RenderComponent\CBufferPool.cpp" />
+    <ClCompile Include="RenderComponent\Material.cpp" />
+    <ClCompile Include="RenderComponent\MObject.cpp" />
+    <ClCompile Include="RenderComponent\Shader.cpp" />
+    <ClCompile Include="RenderComponent\Texture2D.cpp" />
+    <ClCompile Include="RenderComponent\UploadBuffer.cpp" />
+    <ClCompile Include="Singleton\FrameResource.cpp" />
+    <ClCompile Include="Singleton\MeshLayout.cpp" />
+    <ClCompile Include="Singleton\PSOContainer.cpp" />
+    <ClCompile Include="Singleton\ShaderID.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <ProjectGuid>{99BAD649-F897-4374-B69D-EEB3F9CAE027}</ProjectGuid>

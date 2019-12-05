@@ -6,13 +6,30 @@
 
 using namespace DirectX;
 
-Camera::Camera()
+CBufferPool Camera::pool(sizeof(PassConstants), 256);
+Camera::Camera(ID3D12Device* device) : MObject()
 {
 	SetLens(0.25f*MathHelper::Pi, 1.0f, 1.0f, 1000.0f);
+	for (int i = 0; i < FrameResource::mFrameResources.size(); ++i)
+	{
+		ConstBufferElement constBuffer = pool.GetBuffer(device);
+		FrameResource::mFrameResources[i]->cameraCBs[GetInstanceID()] = constBuffer;
+	}
+}
+
+void Camera::Dispose()
+{
+	for (int i = 0; i < FrameResource::mFrameResources.size(); ++i)
+	{
+		ConstBufferElement constBuffer = FrameResource::mFrameResources[i]->cameraCBs[GetInstanceID()];
+		pool.Release(constBuffer.buffer, constBuffer.element);
+		FrameResource::mFrameResources[i]->cameraCBs.erase(GetInstanceID());
+	}
 }
 
 Camera::~Camera()
 {
+	Release();
 }
 
 XMVECTOR Camera::GetPosition()const
@@ -155,7 +172,6 @@ void Camera::LookAt(const XMFLOAT3& pos, const XMFLOAT3& target, const XMFLOAT3&
 
 XMMATRIX Camera::GetView()const
 {
-	assert(!mViewDirty);
 	return XMLoadFloat4x4(&mView);
 }
 
@@ -167,7 +183,6 @@ XMMATRIX Camera::GetProj()const
 
 XMFLOAT4X4 Camera::GetView4x4f()const
 {
-	assert(!mViewDirty);
 	return mView;
 }
 
